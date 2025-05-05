@@ -97,4 +97,25 @@ async def receive_data(request: Request):
         # For demo: use first product and a default industry
         first_product = df.iloc[0]
         product_name = first_product["Base Name"]
-        industry = data.get("industry", "Apparel")  # Allow industry
+        industry = data.get("industry", "Apparel")  # Allow industry override
+
+        reco = get_recommendation(product_name, industry)
+        if not reco:
+            return {"status": "error", "message": "Recommendation not found"}
+
+        insights = get_deal_insights(
+            reco["Product"], reco["Industry"], reco["MOQ"], reco["Payment Terms"]
+        )
+
+        return {
+            "status": "success",
+            "recommendation": reco,
+            "insights": insights
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# Run locally
+if __name__ == "__main__":
+    uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)

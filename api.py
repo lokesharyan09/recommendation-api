@@ -1,52 +1,58 @@
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-import os
 import pandas as pd
-import json
+import os
+from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-# Enable CORS for testing or integration (optional but helpful)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+DATA_FOLDER = "data"  # Folder where all industry CSV files are stored
 
-# Load all CSV files in the data folder
-DATA_FOLDER = "data"
-dataframes = []
-
-for filename in os.listdir(DATA_FOLDER):
-    if filename.endswith(".csv"):
-        df = pd.read_csv(os.path.join(DATA_FOLDER, filename))
-        dataframes.append(df)
-
-@app.post("/recommend")
-async def recommend_products(request: Request):
+@app.post("/get-recommendation")
+async def get_recommendation(request: Request):
     try:
-        body = await request.json()
-        product = body.get("product")
-        industry = body.get("industry")
+        input_data = await request.json()
+        product = input_data.get("product")
+        industry = input_data.get("industry")
 
         if not product or not industry:
-            return {"error": "Both 'product' and 'industry' fields are required."}
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Both 'product' and 'industry' fields are required."}
+            )
 
-        # Search across all dataframes
-        matched_results = []
-        for df in dataframes:
-            matches = df[
-                (df["product"].str.lower() == product.lower()) &
-                (df["industry"].str.lower() == industry.lower())
-            ]
-            if not matches.empty:
-                matched_results.extend(matches.to_dict(orient="records"))
+        # Construct the expected CSV file path
+        csv_file_path = os.path.join(DATA_FOLDER, f"{industry}.csv")
 
-        if matched_results:
-            return {"status": "success", "recommendations": matched_results}
-        else:
-            return {"status": "no_matches", "message": "No matching records found."}
+        if not os.path.exists(csv_file_path):
+            return JSONResponse(
+                status_code=404,
+                content={"status": "error", "message": f"No data file found for industry: {industry}"}
+            )
+
+        df = pd.read_csv(csv_file_path)
+
+        # Check for product in the 'Name' column
+        if "Name" not in df.columns:
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "message": "CSV format invalid. 'Name' column missing."}
+            )
+
+        matched_rows = df[df["Name"].str.strip().str.lower() == product.strip().lower()]
+
+        if matched_rows.empty:
+            return JSONResponse(
+                status_code=404,
+                content={"status": "error", "message": f"Product '{product}' not found in industry '{industry}'."}
+            )
+
+        # Convert result to dictionary
+        results = matched_rows.to_dict(orient="records")
+
+        return {"status": "success", "recommendations": results}
 
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )

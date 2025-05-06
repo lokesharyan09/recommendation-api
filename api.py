@@ -1,56 +1,52 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-import pandas as pd
+from fastapi.middleware.cors import CORSMiddleware
 import os
+import pandas as pd
+import json
 
 app = FastAPI()
 
-# Path where your CSV files are stored (adjust if you're using a different path)
-CSV_FOLDER = "data"
+# Enable CORS for testing or integration (optional but helpful)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Load all CSV files into a single DataFrame at startup
-all_dataframes = []
+# Load all CSV files in the data folder
+DATA_FOLDER = "data"
+dataframes = []
 
-for filename in os.listdir(CSV_FOLDER):
+for filename in os.listdir(DATA_FOLDER):
     if filename.endswith(".csv"):
-        df = pd.read_csv(os.path.join(CSV_FOLDER, filename))
-        all_dataframes.append(df)
+        df = pd.read_csv(os.path.join(DATA_FOLDER, filename))
+        dataframes.append(df)
 
-combined_df = pd.concat(all_dataframes, ignore_index=True)
-
-@app.get("/")
-def health_check():
-    return {"message": "API is up and running!"}
-
-@app.post("/get-recommendations")
-async def get_recommendations(request: Request):
+@app.post("/recommend")
+async def recommend_products(request: Request):
     try:
         body = await request.json()
         product = body.get("product")
         industry = body.get("industry")
 
         if not product or not industry:
-            return JSONResponse(
-                status_code=400,
-                content={"status": "error", "message": "Missing 'product' or 'industry' field"}
-            )
+            return {"error": "Both 'product' and 'industry' fields are required."}
 
-        # Filter the DataFrame based on product and industry
-        filtered_df = combined_df[
-            (combined_df["product"].str.lower() == product.lower()) &
-            (combined_df["industry"].str.lower() == industry.lower())
-        ]
+        # Search across all dataframes
+        matched_results = []
+        for df in dataframes:
+            matches = df[
+                (df["product"].str.lower() == product.lower()) &
+                (df["industry"].str.lower() == industry.lower())
+            ]
+            if not matches.empty:
+                matched_results.extend(matches.to_dict(orient="records"))
 
-        if filtered_df.empty:
-            return {"status": "success", "recommendations": []}
-
-        # Format results as list of dictionaries
-        recommendations = filtered_df.to_dict(orient="records")
-
-        return {"status": "success", "recommendations": recommendations}
+        if matched_results:
+            return {"status": "success", "recommendations": matched_results}
+        else:
+            return {"status": "no_matches", "message": "No matching records found."}
 
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": str(e)}
-        )
+        return {"status": "error", "message": str(e)}

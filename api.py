@@ -1,59 +1,56 @@
 from fastapi import FastAPI, Request
-import boto3
-import os
+from fastapi.responses import JSONResponse
 import pandas as pd
-from botocore.exceptions import NoCredentialsError
-import io
+import os
 
-# Initialize FastAPI
 app = FastAPI()
 
-# Set up AWS credentials from environment variables (Render environment)
-aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
-aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-aws_region = os.getenv("AWS_REGION")
-bucket_name = os.getenv("AWS_S3_BUCKET_NAME")
+# Path where your CSV files are stored (adjust if you're using a different path)
+CSV_FOLDER = "data"
 
-# Set up S3 client
-s3_client = boto3.client(
-    's3',
-    aws_access_key_id=aws_access_key_id,
-    aws_secret_access_key=aws_secret_access_key,
-    region_name=aws_region
-)
+# Load all CSV files into a single DataFrame at startup
+all_dataframes = []
 
-# Root endpoint for health check
+for filename in os.listdir(CSV_FOLDER):
+    if filename.endswith(".csv"):
+        df = pd.read_csv(os.path.join(CSV_FOLDER, filename))
+        all_dataframes.append(df)
+
+combined_df = pd.concat(all_dataframes, ignore_index=True)
+
 @app.get("/")
-async def root():
+def health_check():
     return {"message": "API is up and running!"}
 
-@app.post("/upload-product-data")
-async def receive_data(request: Request):
+@app.post("/get-recommendations")
+async def get_recommendations(request: Request):
     try:
-        # Receive JSON data from the client
-        data = await request.json()
+        body = await request.json()
+        product = body.get("product")
+        industry = body.get("industry")
 
-        # Check if 'products' data is present
-        products = data.get("products")
-        if not products:
-            return {"status": "error", "message": "No 'products' field found"}
+        if not product or not industry:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Missing 'product' or 'industry' field"}
+            )
 
-        # Convert products list to a DataFrame
-        df = pd.DataFrame(products)
+        # Filter the DataFrame based on product and industry
+        filtered_df = combined_df[
+            (combined_df["product"].str.lower() == product.lower()) &
+            (combined_df["industry"].str.lower() == industry.lower())
+        ]
 
-        # Save to AWS S3 as a CSV file
-        csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False)
-        csv_buffer.seek(0)  # Move cursor to the beginning of the buffer
+        if filtered_df.empty:
+            return {"status": "success", "recommendations": []}
 
-        s3_client.put_object(
-            Bucket=bucket_name,
-            Key="uploaded_from_salesforce.csv",  # Specify the key in S3
-            Body=csv_buffer.getvalue()  # Get CSV content as string
-        )
+        # Format results as list of dictionaries
+        recommendations = filtered_df.to_dict(orient="records")
 
-        return {"status": "success", "message": "Data successfully uploaded to AWS S3"}
+        return {"status": "success", "recommendations": recommendations}
 
     except Exception as e:
-        return {"status": "error", "message": str(e)}
-
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
